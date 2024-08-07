@@ -16,13 +16,13 @@ import torch.nn.init as init
 from StyleFeatureEditor.models.methods import FSEInverter32
 
 
-
 def _weights_init(m):
     classname = m.__class__.__name__
     if isinstance(m, nn.Linear):
         init.constant_(m.weight, 0)
     elif isinstance(m, nn.Conv2d):
         init.constant_(m.weight, 0)
+
 
 class Mapper(nn.Module):
     def __init__(self):
@@ -73,6 +73,7 @@ class Encoder(nn.Module):
             return feat, self.img_conv(feat)
         return feat, None
 
+
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes,
@@ -84,6 +85,7 @@ def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
                      bias=False,
                      dilation=dilation)
 
+
 def conv1x1(in_planes, out_planes, stride=1):
     """1x1 convolution"""
     return nn.Conv2d(in_planes,
@@ -91,6 +93,7 @@ def conv1x1(in_planes, out_planes, stride=1):
                      kernel_size=1,
                      stride=stride,
                      bias=False)
+
 
 class IBasicBlock(nn.Module):
     expansion = 1
@@ -152,14 +155,30 @@ class Fuser(nn.Module):
         return x
 
 
+class AdaIN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc = nn.Linear(512, 1024)
+        self.conv = nn.Conv2d(512, 512, 3, padding=1)
+        self.relu = nn.LeakyReLU(0.2)
+        self.norm = nn.InstanceNorm2d(512)
+
+    def forward(self, input, f_source):
+        b_size_chanel_source = f_source.transpose(1, 2).transpose(2, 3)  # B x 32 x 32 x 512
+        b_size_chanel_source_style = self.fc(b_size_chanel_source)  # B x 32 x 32 x 1024
+        alpha, beta = torch.chunk(b_size_chanel_source_style, 2, -1)  # B x 32 x 32 x 512, B x 32 x 32 x 512
+        alpha = alpha.transpose(2, 3).transpose(1, 2)  # B x 512 x 32 x 32
+        beta = beta.transpose(2, 3).transpose(1, 2)  # B x 512 x 32 x 32
+        x = alpha * self.norm(input) + beta  # B x 512 x 32 x 32
+        x = self.relu(x)
+        x = self.conv(x)
+        x = self.relu(x)
+        return x
+
 
 class Net(nn.Module):
     def __init__(self, opts):
         super(Net, self).__init__()
-
-        # ########################### FSE #######################
-        # self.target_encoder = FSencoder.get_trainer(opts.device)
-        # #######################################################
 
         self.target_encoder = FSEInverter32(checkpoint_path='pretrained_ckpts/iteration_135000.pt').eval()
 
@@ -177,30 +196,41 @@ class Net(nn.Module):
 
         self.face_parser = FaceParser(seg_ckpt='./pretrained_ckpts/79999_iter.pth', device='cuda:0').eval()
 
-        self.fuser = Fuser([[1024, 2], [768, 2], [512, 2]], init_zeros=False)
+        # self.fuser = nn.Sequential(AdaIN(), AdaIN(), AdaIN(), AdaIN(), AdaIN(), AdaIN())
+        self.adain1 = AdaIN()
+        self.adain2 = AdaIN()
+        self.adain3 = AdaIN()
+        self.adain4 = AdaIN()
+        self.adain5 = AdaIN()
+        self.adain6 = AdaIN()
+
         self.shifter = Fuser([[512, 2]], 512)
 
         requires_grad(self.mapping, True)
         requires_grad(self.shifter, True)
-        requires_grad(self.fuser, True)
         requires_grad(self.G, False)
         requires_grad(self.source_shape, False)
         requires_grad(self.source_identity, False)
         requires_grad(self.target_encoder, False)
         requires_grad(self.face_parser, False)
-        
+        requires_grad(self.adain1, True)
+        requires_grad(self.adain2, True)
+        requires_grad(self.adain3, True)
+        requires_grad(self.adain4, True)
+        requires_grad(self.adain5, True)
+        requires_grad(self.adain6, True)
+
     def get_mask(self, img, mode=None, verbose=False):
-        
+
         mask = faceParsing_demo(self.face_parser, img, convert_to_seg12=True, model_name='default').long()
 
         if mode == 'target':
             mask_ = logical_or_reduce(*[mask == item for item in [0, 4, 6, 7, 8, 10, 11]]).float()
         else:
             mask_ = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 9]]).float()
-        
-        
+
         mask_32 = F.interpolate(mask_.unsqueeze(1), 32, mode='bilinear', align_corners=False)
-        mask_dil = dilation(mask_32, torch.ones(3, 3), engine = 'convolution')
+        mask_dil = dilation(mask_32, torch.ones(3, 3), engine='convolution')
         mask_blur = blur(kernel_size=3, sigma=1)(mask_dil)
         if verbose:
             return mask_blur, mask
@@ -216,32 +246,23 @@ class Net(nn.Module):
         if verbose:
             recon = []
             masks = []
-        
+
         s_w_id, _ = self.source_identity(s_256, True)
         t_w_id, _ = self.source_identity(t_256, True)
         t_w_id += self.latent_avg[None, ...]
-        # s_w_id_fse, s_feat = self.target_encoder.test(img=source, return_latent=True)[-2:]
         s_w_id_sfe, s_feat = self.target_encoder(s_256)
         if verbose:
             recon.append(self.G([s_w_id_sfe], new_features=[None] * 7 + [s_feat] + [None] * (17 - 7))[0])
-            
-        # s_feat = self.G([s_w_id_fse], s_feat, early_stop=32)
 
-        
         alpha = self.source_shape(source)['shape']
         s_w_shape = self.mapping(alpha)
 
-        
         s_style = s_w_id + s_w_shape[:, None, :] + self.latent_avg[None, ...]
 
-        
-        # t_style, t_feat_ = self.target_encoder.test(img=target, return_latent=True)[-2:]
         t_style, t_feat = self.target_encoder(t_256)
         if verbose:
             recon.append(self.G([t_style], new_features=[None] * 7 + [t_feat] + [None] * (17 - 7))[0])
-        # t_feat = self.G([t_style], t_feat_, early_stop=32)
 
-        
         s_mask, s_mask_vis = self.get_mask(source, 'source', verbose)
         s_mask = s_mask.cuda()
         t_mask, t_mask_vis = self.get_mask(target, 'target', verbose)
@@ -251,28 +272,21 @@ class Net(nn.Module):
             masks.append(s_mask_vis)
             masks.append(t_mask_vis)
 
-        # #################################
-        # x = s_mask1[0].cpu() * (F.interpolate(target[0].cpu().unsqueeze(0), 32, mode='bilinear')[0] + 1) / 2
-        # T.ToPILImage()(F.interpolate(x.unsqueeze(0), 1024, mode='bilinear')[0]).save('image.jpg')
-        # #################################
-        
-
         s_feat_masked = s_feat * s_mask
         s_feat_shifted = self.shifter(s_feat_masked)
-        # s_feat_shifted = self.shifter(s_feat)
-        
         t_feat_masked = t_feat * t_mask
-        
-        delta_feat = self.fuser(torch.cat([s_feat_shifted, t_feat_masked], dim=1))
-        # delta_feat = self.fuser(torch.cat([s_feat_shifted, t_feat], dim=1))
-        a = min(1.0, step + 250 / 500)
-        feat = (1 - a) * t_feat + a * delta_feat
 
+        delta_feat_1 = self.adain1(t_feat_masked, s_feat_shifted)
+        delta_feat_2 = self.adain2(delta_feat_1, s_feat_shifted)
+        delta_feat_3 = self.adain3(delta_feat_2, s_feat_shifted)
+        delta_feat_4 = self.adain4(delta_feat_3, s_feat_shifted)
+        delta_feat_5 = self.adain5(delta_feat_4, s_feat_shifted)
+        delta_feat = self.adain6(delta_feat_5, s_feat_shifted)
+        a = 1.0
+        feat = t_feat + delta_feat
 
         s_style[:, :7] = t_w_id[:, :7]
         img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
-        # t_style, t_feat = self.target_encoder.test(img=img, return_latent=True)[-2:]# here
-        # return img, t_feat_, t_feat # here
         if verbose:
             return img, masks, recon
         if return_feat:
@@ -295,7 +309,6 @@ class Net(nn.Module):
 # from torchvision.transforms import GaussianBlur as blur
 # import torch.nn.init as init
 # from StyleFeatureEditor.models.methods import FSEInverter32
-
 
 
 # def _weights_init(m):
@@ -433,7 +446,6 @@ class Net(nn.Module):
 #         return x
 
 
-
 # class Net(nn.Module):
 #     def __init__(self, opts):
 #         super(Net, self).__init__()
@@ -443,7 +455,7 @@ class Net(nn.Module):
 #         # #######################################################
 
 #         self.target_encoder = FSEInverter32(checkpoint_path='pretrained_ckpts/iteration_135000.pt').eval()
-        
+
 
 #         ########################### E4E #######################
 #         self.source_identity = Encoder4Editing(50, 'ir_se', opts).eval()
@@ -470,17 +482,17 @@ class Net(nn.Module):
 #         requires_grad(self.source_identity, False)
 #         requires_grad(self.target_encoder, False)
 #         requires_grad(self.face_parser, False)
-        
+
 #     def get_mask(self, img, mode=None, verbose=False):
-        
+
 #         mask = faceParsing_demo(self.face_parser, img, convert_to_seg12=True, model_name='default').long()
 
 #         if mode == 'target':
 #             mask_ = logical_or_reduce(*[mask == item for item in [0, 4, 6, 8, 10, 11]]).float()
 #         else:
 #             mask_ = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 7, 9]]).float()
-        
-        
+
+
 #         mask_32 = F.interpolate(mask_.unsqueeze(1), 32, mode='bilinear', align_corners=False)
 #         mask_dil = dilation(mask_32, torch.ones(3, 3), engine = 'convolution')
 #         mask_blur = blur(kernel_size=3, sigma=1)(mask_dil)
@@ -498,7 +510,7 @@ class Net(nn.Module):
 #         if verbose:
 #             recon = []
 #             masks = []
-        
+
 #         s_w_id, _ = self.source_identity(s_256, True)
 #         t_w_id, _ = self.source_identity(t_256, True)
 #         t_w_id += self.latent_avg[None, ...]
@@ -508,17 +520,17 @@ class Net(nn.Module):
 #             # recon.append(self.G([s_w_id_sfe], s_feat, start=7)[0])
 #             recon.append(self.G([s_w_id_sfe], new_features=[None] * 7 + [s_feat] + [None] * (17 - 7))[0])
 #             # recon.append(im_s)
-            
+
 #         # s_feat = self.G([s_w_id_fse], s_feat, early_stop=32)
 
-        
+
 #         alpha = self.source_shape(source)['shape']
 #         s_w_shape = self.mapping(alpha)
 
-        
+
 #         s_style = s_w_id + s_w_shape[:, None, :] + self.latent_avg[None, ...]
 
-        
+
 #         # t_style, t_feat_ = self.target_encoder.test(img=target, return_latent=True)[-2:]
 #         t_style, t_feat = self.target_encoder(t_256)
 #         if verbose:
@@ -527,7 +539,7 @@ class Net(nn.Module):
 #             # recon.append(im_t)
 #         # t_feat = self.G([t_style], t_feat_, early_stop=32)
 
-        
+
 #         s_mask, s_mask_vis = self.get_mask(source, 'source', verbose)
 #         s_mask = s_mask.cuda()
 #         t_mask, t_mask_vis = self.get_mask(target, 'target', verbose)
@@ -541,14 +553,14 @@ class Net(nn.Module):
 #         # x = s_mask1[0].cpu() * (F.interpolate(target[0].cpu().unsqueeze(0), 32, mode='bilinear')[0] + 1) / 2
 #         # T.ToPILImage()(F.interpolate(x.unsqueeze(0), 1024, mode='bilinear')[0]).save('image.jpg')
 #         # #################################
-        
+
 
 #         s_feat_masked = s_feat * s_mask
 #         s_feat_shifted = self.shifter(s_feat_masked)
 #         # s_feat_shifted = self.shifter(s_feat)
-        
+
 #         t_feat_masked = t_feat * t_mask
-        
+
 #         delta_feat = self.fuser(torch.cat([s_feat_shifted, t_feat_masked], dim=1))
 #         # delta_feat = self.fuser(torch.cat([s_feat_shifted, t_feat], dim=1))
 #         feat = t_feat + delta_feat
@@ -562,27 +574,10 @@ class Net(nn.Module):
 #         return img
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # class Net(nn.Module):
 #     def __init__(self, opts):
 #         super(Net, self).__init__()
-        
+
 #         self.target_encoder = FSencoder.get_trainer(opts.device)
 #         requires_grad(self.target_encoder, False)  # TODO потом удалить
 #         #######################################################
@@ -612,21 +607,21 @@ class Net(nn.Module):
 #             requires_grad(self.G.to_rgb1, False)
 #             requires_grad(self.G.convs[:6], False)
 #             requires_grad(self.G.to_rgbs[:3], False)
-        
+
 #     def get_mask(self, img, mode=None):
-        
+
 #         mask = faceParsing_demo(self.face_parser, img, convert_to_seg12=True, model_name='default').long()
 
 #         if mode == 'target':
 #             mask = logical_or_reduce(*[mask == item for item in [0, 4, 6, 8, 10, 11]]).float()
 #         else:
 #             mask = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 7, 9]]).float()
-        
-        
+
+
 #         mask = F.interpolate(mask.unsqueeze(1), 32, mode='bilinear', align_corners=False)
 #         # mask = dilation(mask, torch.ones(3, 3), engine = 'convolution')
 #         mask = blur(kernel_size=3, sigma=1)(mask)
-        
+
 #         return mask
 
 #     def forward(self, source, target):
@@ -638,24 +633,20 @@ class Net(nn.Module):
 
 #         s_w_id, _ = self.source_identity(s_256, True)
 
-        
+
 #         alpha = self.source_shape(source)['shape']
 #         s_w_shape = self.mapping(alpha)
 
-        
+
 #         s_style = s_w_id + s_w_shape[:, None, :] + self.latent_avg[None, ...]
 
-        
+
 #         t_style, t_feat_ = self.target_encoder.test(img=target, return_latent=True)[-2:]
 
 #         s_style[:, :7] = t_style[:, :7]
 
 #         img, _ = self.G([s_style], t_feat_)
 #         return img
-
-
-
-
 
 
 # class Net(nn.Module):
@@ -708,21 +699,21 @@ class Net(nn.Module):
 #         # self.fuser = nn.Conv2d(1024, 512, 3, padding=1, bias=False)
 #         self.shifter = Fuser([[512, 2]], 512)
 #         # requires_grad(self.shifter, False) # here
-        
+
 #     def get_mask(self, img, mode=None):
-        
+
 #         mask = faceParsing_demo(self.face_parser, img, convert_to_seg12=True, model_name='default').long()
 
 #         if mode == 'target':
 #             mask = logical_or_reduce(*[mask == item for item in [0, 4, 6, 8, 10, 11]]).float()
 #         else:
 #             mask = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 7, 9]]).float()
-        
-        
+
+
 #         mask = F.interpolate(mask.unsqueeze(1), 32, mode='bilinear', align_corners=False)
 #         # mask = dilation(mask, torch.ones(3, 3), engine = 'convolution')
 #         mask = blur(kernel_size=3, sigma=1)(mask)
-        
+
 #         return mask
 
 #     def forward(self, source, target):
@@ -736,21 +727,21 @@ class Net(nn.Module):
 #         s_w_id_fse, s_feat = self.target_encoder.test(img=source, return_latent=True)[-2:]
 #         s_feat = self.G([s_w_id_fse], s_feat, early_stop=32)
 
-        
+
 #         ## s_w_id, s_feats = self.target_encoder.test(img=source, return_latent=True)[-2:]
 
-        
+
 #         alpha = self.source_shape(source)['shape']
 #         s_w_shape = self.mapping(alpha)
 
-        
+
 #         s_style = s_w_id + s_w_shape[:, None, :] + self.latent_avg[None, ...]
 
-        
+
 #         ## s_feat = s_w_id + s_w_shape[:, None, :]
 #         ## t_feat, rgb_image = self.target_encoder(t_256)
 
-        
+
 #         t_style, t_feat_ = self.target_encoder.test(img=target, return_latent=True)[-2:]
 #         t_feat = self.G([t_style], t_feat_, early_stop=32)
 
@@ -765,13 +756,13 @@ class Net(nn.Module):
 #         # x = s_mask1[0].cpu() * (F.interpolate(target[0].cpu().unsqueeze(0), 32, mode='bilinear')[0] + 1) / 2
 #         # T.ToPILImage()(F.interpolate(x.unsqueeze(0), 1024, mode='bilinear')[0]).save('image.jpg')
 #         # #################################
-        
+
 
 #         s_feat = s_feat * s_mask #here
 #         s_feat = self.shifter(s_feat)
-        
+
 #         t_feat = t_feat * t_mask
-        
+
 #         feat = self.fuser(torch.cat([s_feat, t_feat], dim=1)) # here
 
 
@@ -779,4 +770,3 @@ class Net(nn.Module):
 #         # t_style, t_feat = self.target_encoder.test(img=img, return_latent=True)[-2:]# here
 #         # return img, t_feat_, t_feat # here
 #         return img
-
