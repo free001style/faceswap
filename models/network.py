@@ -14,6 +14,7 @@ from utils.morphology import dilation
 from torchvision.transforms import GaussianBlur as blur
 import torch.nn.init as init
 from StyleFeatureEditor.models.methods import FSEInverter32
+from models.psp.model_irse import Backbone
 
 
 def _weights_init(m):
@@ -155,21 +156,31 @@ class Fuser(nn.Module):
         return x
 
 
+class AdaIN_param(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(512, 512)
+        self.fc2 = nn.Linear(512, 512)
+        self.norm = nn.LayerNorm(512)
+        self.relu = nn.LeakyReLU(0.2)
+
+    def forward(self, x):
+        return self.fc2(self.relu(self.norm(self.fc1(x))))
+
+
 class AdaIN(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc = nn.Linear(512, 1024)
+        self.gamma_net = AdaIN_param()
+        self.beta_net = AdaIN_param()
         self.conv = nn.Conv2d(512, 512, 3, padding=1)
         self.relu = nn.LeakyReLU(0.2)
         self.norm = nn.InstanceNorm2d(512)
 
-    def forward(self, input, f_source):
-        b_size_chanel_source = f_source.transpose(1, 2).transpose(2, 3)  # B x 32 x 32 x 512
-        b_size_chanel_source_style = self.fc(b_size_chanel_source)  # B x 32 x 32 x 1024
-        alpha, beta = torch.chunk(b_size_chanel_source_style, 2, -1)  # B x 32 x 32 x 512, B x 32 x 32 x 512
-        alpha = alpha.transpose(2, 3).transpose(1, 2)  # B x 512 x 32 x 32
-        beta = beta.transpose(2, 3).transpose(1, 2)  # B x 512 x 32 x 32
-        x = alpha * self.norm(input) + beta  # B x 512 x 32 x 32
+    def forward(self, input, source_latent):
+        gamma = self.gamma_net(source_latent)
+        beta = self.beta_net(source_latent)
+        x = gamma[..., None, None] * self.norm(input) + beta[..., None, None]  # B x 512 x 32 x 32
         x = self.relu(x)
         x = self.conv(x)
         x = self.relu(x)
@@ -181,6 +192,10 @@ class Net(nn.Module):
         super(Net, self).__init__()
 
         self.target_encoder = FSEInverter32(checkpoint_path='pretrained_ckpts/iteration_135000.pt').eval()
+
+        self.arcface = Backbone(input_size=112, num_layers=50, drop_ratio=0.6, mode='ir_se')
+        self.arcface.load_state_dict(torch.load(opts.ir_se50_path))
+        self.arcface.eval()
 
         ########################### E4E #######################
         self.source_identity = Encoder4Editing(50, 'ir_se', opts).eval()
@@ -194,9 +209,6 @@ class Net(nn.Module):
 
         self.G = Generator(1024, 512, 8)
 
-        self.face_parser = FaceParser(seg_ckpt='./pretrained_ckpts/79999_iter.pth', device='cuda:0').eval()
-
-        # self.fuser = nn.Sequential(AdaIN(), AdaIN(), AdaIN(), AdaIN(), AdaIN(), AdaIN())
         self.adain1 = AdaIN()
         self.adain2 = AdaIN()
         self.adain3 = AdaIN()
@@ -204,15 +216,12 @@ class Net(nn.Module):
         self.adain5 = AdaIN()
         self.adain6 = AdaIN()
 
-        self.shifter = Fuser([[512, 2]], 512)
-
         requires_grad(self.mapping, True)
-        requires_grad(self.shifter, True)
         requires_grad(self.G, False)
         requires_grad(self.source_shape, False)
         requires_grad(self.source_identity, False)
         requires_grad(self.target_encoder, False)
-        requires_grad(self.face_parser, False)
+        requires_grad(self.arcface, False)
         requires_grad(self.adain1, True)
         requires_grad(self.adain2, True)
         requires_grad(self.adain3, True)
@@ -243,16 +252,9 @@ class Net(nn.Module):
         s_256 = F.interpolate(source, (256, 256), mode='bilinear')
         t_256 = F.interpolate(target, (256, 256), mode='bilinear')
 
-        if verbose:
-            recon = []
-            masks = []
-
         s_w_id, _ = self.source_identity(s_256, True)
         t_w_id, _ = self.source_identity(t_256, True)
         t_w_id += self.latent_avg[None, ...]
-        s_w_id_sfe, s_feat = self.target_encoder(s_256)
-        if verbose:
-            recon.append(self.G([s_w_id_sfe], new_features=[None] * 7 + [s_feat] + [None] * (17 - 7))[0])
 
         alpha = self.source_shape(source)['shape']
         s_w_shape = self.mapping(alpha)
@@ -260,37 +262,25 @@ class Net(nn.Module):
         s_style = s_w_id + s_w_shape[:, None, :] + self.latent_avg[None, ...]
 
         t_style, t_feat = self.target_encoder(t_256)
-        if verbose:
-            recon.append(self.G([t_style], new_features=[None] * 7 + [t_feat] + [None] * (17 - 7))[0])
 
-        s_mask, s_mask_vis = self.get_mask(source, 'source', verbose)
-        s_mask = s_mask.cuda()
-        t_mask, t_mask_vis = self.get_mask(target, 'target', verbose)
-        t_mask = t_mask.cuda()
+        s_112 = F.interpolate(s_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
+        source_latent = self.arcface(s_112)[0]
 
-        if verbose:
-            masks.append(s_mask_vis)
-            masks.append(t_mask_vis)
-
-        s_feat_masked = s_feat * s_mask
-        s_feat_shifted = self.shifter(s_feat_masked)
-        t_feat_masked = t_feat * t_mask
-
-        delta_feat_1 = self.adain1(t_feat_masked, s_feat_shifted)
-        delta_feat_2 = self.adain2(delta_feat_1, s_feat_shifted)
-        delta_feat_3 = self.adain3(delta_feat_2, s_feat_shifted)
-        delta_feat_4 = self.adain4(delta_feat_3, s_feat_shifted)
-        delta_feat_5 = self.adain5(delta_feat_4, s_feat_shifted)
-        delta_feat = self.adain6(delta_feat_5, s_feat_shifted)
+        delta_feat_1 = self.adain1(t_feat, source_latent)
+        delta_feat_2 = self.adain2(delta_feat_1, source_latent)
+        delta_feat_3 = self.adain3(delta_feat_2, source_latent)
+        delta_feat_4 = self.adain4(delta_feat_3, source_latent)
+        delta_feat_5 = self.adain5(delta_feat_4, source_latent)
+        delta_feat = self.adain6(delta_feat_5, source_latent)
         a = 1.0
         feat = t_feat + delta_feat
 
         s_style[:, :7] = t_w_id[:, :7]
         img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
-        if verbose:
-            return img, masks, recon
         if return_feat:
             return img, t_feat, delta_feat, a
+        if verbose:
+            return img, None, None
         return img
 
 # import torch

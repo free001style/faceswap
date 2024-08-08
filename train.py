@@ -218,7 +218,7 @@ class Trainer:
             #     wandb.run.log_artifact(code)
             # else:
             wandb.init(project='RobustSwap', entity='free001style', name=opts.exp_dir.strip('exp/'),
-                           config=self.opts)
+                       config=self.opts)
 
         # Initialize checkpoint dir
         self.checkpoint_dir = os.path.join(opts.exp_dir, 'checkpoints')
@@ -309,12 +309,12 @@ class Trainer:
                 source = source.to(self.device).float()
                 target = target.to(self.device).float()
                 flag = flag.to(self.device)
-                
+
                 # ============ update D ===============
                 if self.opts.train_D and (self.global_step % self.opts.d_every == 0):
                     torch_utils.requires_grad(self.net, False)
                     torch_utils.requires_grad(self.D, True)
-                    self.net.module.face_parser.eval()
+                    self.net.module.arcface.eval()
                     self.net.module.source_identity.eval()
                     self.net.module.target_encoder.eval()
                     swap = self.net(source, target)
@@ -334,7 +334,7 @@ class Trainer:
 
                     r1_loss = torch.tensor(0.0, device=self.device)
                     # R1 regularization
-                
+
                     if self.opts.d_reg_every != -1 and self.global_step % self.opts.d_reg_every == 0:
                         source.requires_grad = True
 
@@ -346,34 +346,32 @@ class Trainer:
                         self.optimizer_D.step()
 
                     d_loss_dict["r1_loss"] = float(r1_loss)
-                    
 
                 # ============ update G ===============
                 # self.opts.train_G and self.opts.train_D should be both true or false
-#                 if self.opts.train_G and self.opts.train_D:
-#                     torch_utils.requires_grad(self.net, True)
-#                     torch_utils.requires_grad(self.net.module.G.style, False)  # fix z-to-W mapping of original StyleGAN
-#                     torch_utils.requires_grad(self.net.module.G.input, False)
-#                     torch_utils.requires_grad(self.net.module.G.conv1, False)
-#                     torch_utils.requires_grad(self.net.module.G.to_rgb1, False)
-#                     torch_utils.requires_grad(self.net.module.G.convs[:6], False)
-#                     torch_utils.requires_grad(self.net.module.G.to_rgbs[:3], False)
-#                     torch_utils.requires_grad(self.net.module.source_shape, False)
-#                     torch_utils.requires_grad(self.net.module.source_identity, False)
-#                     torch_utils.requires_grad(self.net.module.source_identity, False)
+                #                 if self.opts.train_G and self.opts.train_D:
+                #                     torch_utils.requires_grad(self.net, True)
+                #                     torch_utils.requires_grad(self.net.module.G.style, False)  # fix z-to-W mapping of original StyleGAN
+                #                     torch_utils.requires_grad(self.net.module.G.input, False)
+                #                     torch_utils.requires_grad(self.net.module.G.conv1, False)
+                #                     torch_utils.requires_grad(self.net.module.G.to_rgb1, False)
+                #                     torch_utils.requires_grad(self.net.module.G.convs[:6], False)
+                #                     torch_utils.requires_grad(self.net.module.G.to_rgbs[:3], False)
+                #                     torch_utils.requires_grad(self.net.module.source_shape, False)
+                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
+                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
 
-#                 # only training Mapping
-#                 elif not self.opts.train_G and not self.opts.train_D:
-#                     torch_utils.requires_grad(self.net.module.G, False)
-#                     torch_utils.requires_grad(self.net.module.source_shape, False)
-#                     torch_utils.requires_grad(self.net.module.source_identity, False)
-#                     torch_utils.requires_grad(self.net.module.target_encoder, False)  # TODO потом удалить
-                
+                #                 # only training Mapping
+                #                 elif not self.opts.train_G and not self.opts.train_D:
+                #                     torch_utils.requires_grad(self.net.module.G, False)
+                #                     torch_utils.requires_grad(self.net.module.source_shape, False)
+                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
+                #                     torch_utils.requires_grad(self.net.module.target_encoder, False)  # TODO потом удалить
+
                 if self.opts.train_D:
                     torch_utils.requires_grad(self.D, False)
 
                 torch_utils.requires_grad(self.net.module.mapping, True)
-                torch_utils.requires_grad(self.net.module.shifter, True)
 
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
@@ -387,23 +385,21 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.source_shape, False)
                 torch_utils.requires_grad(self.net.module.source_identity, False)
                 torch_utils.requires_grad(self.net.module.target_encoder, False)
-                torch_utils.requires_grad(self.net.module.face_parser, False)
-                self.net.module.face_parser.eval()
+                torch_utils.requires_grad(self.net.module.arcface, False)
+                self.net.module.arcface.eval()
                 self.net.module.source_identity.eval()
                 self.net.module.target_encoder.eval()
-                
-                
+
                 swap, gt_feat, t_feat, a = self.net(source, target, return_feat=True, step=self.global_step)
 
                 g_loss = torch.tensor(0.0, device=self.device)
-#                 if self.opts.train_G:
-#                     fake_pred = self.D(swap)
+                #                 if self.opts.train_G:
+                #                     fake_pred = self.D(swap)
 
-#                     g_loss = self.adv_g_loss(fake_pred)
+                #                     g_loss = self.adv_g_loss(fake_pred)
 
                 fake_pred = self.D(swap)
                 g_loss = self.adv_g_loss(fake_pred)
-    
 
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag, gt_feat, t_feat, a)
                 loss_dict["g_loss"] = float(g_loss)
@@ -435,7 +431,6 @@ class Trainer:
                     source15 = img_transform(source15).unsqueeze(0)
                     source1 = torch.cat([source11, source12, source13, source14, source15])
 
-                    
                     target11 = Image.open('photos/dua.png').convert('RGB').resize((1024, 1024))
                     target11 = img_transform(target11).unsqueeze(0)
                     target12 = Image.open('photos/timon.png').convert('RGB').resize((1024, 1024))
@@ -450,14 +445,13 @@ class Trainer:
 
                     source1 = source1.to(self.device).float()
                     target1 = target1.to(self.device).float()
-                    
+
                     swap1, mask, recon = self.net(source1, target1, verbose=True)
                     imgs = self.parse_images(source1, target1, swap1, None, None)
                     self.log_images('images/train/faces', imgs1_data=imgs)
                     if self.global_step < 100:
                         imgs = self.parse_images(source1, target1, swap1, mask, recon)
                         self.log_images('images/train/mask', imgs1_data=imgs, mask=True)
-                    
 
                 if self.rank == 0 and (self.global_step % self.opts.board_interval == 0):
                     self.print_metrics(loss_dict, prefix='train')
@@ -502,18 +496,17 @@ class Trainer:
         loss_dict = {}
         # loss = 0.0
         loss = torch.tensor(0.0, device=self.device)
-        
+
         feat_loss = nn.MSELoss()(gt_feat, t_feat)
         loss_dict['feat_loss'] = float(feat_loss)
         loss += (1 - a) * feat_loss
 
         if self.opts.id_lambda > 0:
             loss_id = self.id_loss(swap, source)
-            
+
             loss_id = loss_id.to(self.device)
-            
+
             loss_id = torch.sum(loss_id * (1 - flag)) / torch.sum(1 - flag)
-            
 
             loss_dict['loss_id'] = float(loss_id)
             loss += loss_id * self.opts.id_lambda
@@ -557,16 +550,16 @@ class Trainer:
                 source_ = torch_utils.tensor2im(source[i])
                 target_ = torch_utils.tensor2im(target[i])
                 cur_im_data = {
-                    'source_recon' : torch_utils.tensor2im(recon[0][i]),
-                    'source_mask' : vis_parsing_maps(source_, mask[0][i].detach().numpy()),
-                    'target_recon' : torch_utils.tensor2im(recon[1][i]),
-                    'target_mask' : vis_parsing_maps(target_, mask[1][i].detach().numpy()),
+                    'source_recon': torch_utils.tensor2im(recon[0][i]),
+                    'source_mask': vis_parsing_maps(source_, mask[0][i].detach().numpy()),
+                    'target_recon': torch_utils.tensor2im(recon[1][i]),
+                    'target_mask': vis_parsing_maps(target_, mask[1][i].detach().numpy()),
                 }
             else:
                 cur_im_data = {
                     'source': torch_utils.tensor2im(source[i]),
                     'target': torch_utils.tensor2im(target[i]),
-                    'swap': torch_utils.tensor2im(swap[i]),}
+                    'swap': torch_utils.tensor2im(swap[i]), }
             im_data.append(cur_im_data)
         return im_data
 
@@ -660,12 +653,11 @@ class Trainer:
         #         if self.opts.train_D:
         #             self.D.train()
         #         return None  # Do not log, inaccurate in first batch
-            
+
         #     for i in range(swap.shape[0]):
         #         torch_utils.tensor2im(source[i]).save(f'validate/{self.global_step}/source/{(batch_idx + 1) * i}.jpg')
         #         torch_utils.tensor2im(target[i]).save(f'validate/{self.global_step}/target/{(batch_idx + 1) * i}.jpg')
         #         torch_utils.tensor2im(swap[i]).save(f'validate/{self.global_step}/swap/{(batch_idx + 1) * i}.jpg')
-                
 
         # loss_dict = torch_utils.aggregate_loss_dict(agg_loss_dict)
         loss_dict = calc_metrics(self.net, self.device)
@@ -692,7 +684,6 @@ def main():
 
 if __name__ == '__main__':
     main()
-
 
 # import json
 # import sys
@@ -1003,7 +994,7 @@ if __name__ == '__main__':
 #                 source = source.to(self.device).float()
 #                 target = target.to(self.device).float()
 #                 flag = flag.to(self.device)
-                
+
 #                 # ============ update D ===============
 #                 # if self.opts.train_D and (self.global_step % self.opts.d_every == 0):
 #                 #     torch_utils.requires_grad(self.net, False)
@@ -1028,7 +1019,7 @@ if __name__ == '__main__':
 
 #                 #     r1_loss = torch.tensor(0.0, device=self.device)
 #                 #     # R1 regularization
-                
+
 #                 #     if self.opts.d_reg_every != -1 and self.global_step % self.opts.d_reg_every == 0:
 #                 #         source.requires_grad = True
 
@@ -1040,7 +1031,7 @@ if __name__ == '__main__':
 #                 #         self.optimizer_D.step()
 
 #                 #     d_loss_dict["r1_loss"] = float(r1_loss)
-                    
+
 
 #                 # ============ update G ===============
 #                 # self.opts.train_G and self.opts.train_D should be both true or false
@@ -1062,7 +1053,7 @@ if __name__ == '__main__':
 # #                     torch_utils.requires_grad(self.net.module.source_shape, False)
 # #                     torch_utils.requires_grad(self.net.module.source_identity, False)
 # #                     torch_utils.requires_grad(self.net.module.target_encoder, False)  # TODO потом удалить
-                
+
 #                 # if self.opts.train_D:
 #                 #     torch_utils.requires_grad(self.D, False)
 #                 torch_utils.requires_grad(self.D, False)
@@ -1078,8 +1069,8 @@ if __name__ == '__main__':
 #                 self.net.module.face_parser.eval()
 #                 self.net.module.source_identity.eval()
 #                 self.net.module.target_encoder.eval()
-                
-                
+
+
 #                 swap = self.net(source, target)
 
 #                 g_loss = torch.tensor(0.0, device=self.device)
@@ -1090,7 +1081,7 @@ if __name__ == '__main__':
 
 #                 fake_pred = self.D(swap)
 #                 g_loss = self.adv_g_loss(fake_pred)
-    
+
 
 #                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
 #                 loss_dict["g_loss"] = float(g_loss)
@@ -1120,7 +1111,7 @@ if __name__ == '__main__':
 #                     source14 = img_transform(source14).unsqueeze(0)
 #                     source1 = torch.cat([source11, source12, source13, source14])
 
-                    
+
 #                     target11 = Image.open('photos/dua.png').convert('RGB').resize((1024, 1024))
 #                     target11 = img_transform(target11).unsqueeze(0)
 #                     target12 = Image.open('photos/timon.png').convert('RGB').resize((1024, 1024))
@@ -1133,14 +1124,14 @@ if __name__ == '__main__':
 
 #                     source1 = source1.to(self.device).float()
 #                     target1 = target1.to(self.device).float()
-                    
+
 #                     swap1, mask, recon = self.net(source1, target1, True)
 #                     imgs = self.parse_images(source1, target1, swap1, None, None)
 #                     self.log_images('images/train/faces', imgs1_data=imgs)
 #                     if self.global_step < 100:
 #                         imgs = self.parse_images(source1, target1, swap1, mask, recon)
 #                         self.log_images('images/train/mask', imgs1_data=imgs, mask=True)
-                    
+
 
 #                 if self.rank == 0 and (self.global_step % self.opts.board_interval == 0):
 #                     self.print_metrics(loss_dict, prefix='train')
@@ -1188,11 +1179,11 @@ if __name__ == '__main__':
 
 #         if self.opts.id_lambda > 0:
 #             loss_id = self.id_loss(swap, source)
-            
+
 #             loss_id = loss_id.to(self.device)
-            
+
 #             loss_id = torch.sum(loss_id * (1 - flag)) / torch.sum(1 - flag)
-            
+
 
 #             loss_dict['loss_id'] = float(loss_id)
 #             loss += loss_id * self.opts.id_lambda
@@ -1339,12 +1330,12 @@ if __name__ == '__main__':
 #         #         if self.opts.train_D:
 #         #             self.D.train()
 #         #         return None  # Do not log, inaccurate in first batch
-            
+
 #         #     for i in range(swap.shape[0]):
 #         #         torch_utils.tensor2im(source[i]).save(f'validate/{self.global_step}/source/{(batch_idx + 1) * i}.jpg')
 #         #         torch_utils.tensor2im(target[i]).save(f'validate/{self.global_step}/target/{(batch_idx + 1) * i}.jpg')
 #         #         torch_utils.tensor2im(swap[i]).save(f'validate/{self.global_step}/swap/{(batch_idx + 1) * i}.jpg')
-                
+
 
 #         # loss_dict = torch_utils.aggregate_loss_dict(agg_loss_dict)
 #         loss_dict = calc_metrics(self.net, self.device)
@@ -1692,7 +1683,7 @@ if __name__ == '__main__':
 #                 source = source.to(self.device).float()
 #                 target = target.to(self.device).float()
 #                 flag = flag.to(self.device)
-                
+
 #                 # ============ update D ===============
 #                 if self.opts.train_D and (self.global_step % self.opts.d_every == 0):
 #                     torch_utils.requires_grad(self.net, False)
@@ -1704,7 +1695,7 @@ if __name__ == '__main__':
 #                     swap = self.net(source, target)
 #                     fake_pred_swap = self.D_swap(swap[:-1])
 #                     real_pred_swap = self.D_swap(target[:-1])
-                    
+
 #                     fake_pred_recon = self.D_recon(swap[-1].unsqueeze(0))
 #                     real_pred_recon = self.D_recon(target[-1].unsqueeze(0))
 
@@ -1731,7 +1722,7 @@ if __name__ == '__main__':
 #                     r1_loss_swap = torch.tensor(0.0, device=self.device)
 #                     r1_loss_recon = torch.tensor(0.0, device=self.device)
 #                     # R1 regularization
-                
+
 #                     if self.opts.d_reg_every != -1 and self.global_step % self.opts.d_reg_every == 0:
 #                         source_swap = source[:-1]
 #                         source_recon = source[-1].unsqueeze(0)
@@ -1746,14 +1737,14 @@ if __name__ == '__main__':
 #                         self.D_swap.zero_grad()
 #                         (self.opts.r1_lambda / 2 * r1_loss_swap * self.opts.d_reg_every + 0 * real_pred_swap[0]).backward()
 #                         self.optimizer_D_swap.step()
-                        
+
 #                         self.D_recon.zero_grad()
 #                         (self.opts.r1_lambda / 2 * r1_loss_recon * self.opts.d_reg_every + 0 * real_pred_recon[0]).backward()
 #                         self.optimizer_D_recon.step()
 
 #                     d_loss_dict["r1_loss_swap"] = float(r1_loss_swap)
 #                     d_loss_dict["r1_loss_recon"] = float(r1_loss_recon)
-                    
+
 
 #                 # ============ update G ===============
 #                 # self.opts.train_G and self.opts.train_D should be both true or false
@@ -1775,7 +1766,7 @@ if __name__ == '__main__':
 # #                     torch_utils.requires_grad(self.net.module.source_shape, False)
 # #                     torch_utils.requires_grad(self.net.module.source_identity, False)
 # #                     torch_utils.requires_grad(self.net.module.target_encoder, False)  # TODO потом удалить
-                
+
 #                 if self.opts.train_D:
 #                     torch_utils.requires_grad(self.D_swap, False)
 #                     torch_utils.requires_grad(self.D_recon, False)
@@ -1791,7 +1782,7 @@ if __name__ == '__main__':
 #                 self.net.module.face_parser.eval()
 #                 self.net.module.target_encoder.eval()
 #                 self.net.module.source_identity.eval()
-                
+
 #                 swap = self.net(source, target)
 
 #                 g_loss = torch.tensor(0.0, device=self.device)
@@ -1803,7 +1794,7 @@ if __name__ == '__main__':
 #                 fake_pred = self.D_swap(swap)
 #                 fake_pred[-1] = self.D_recon(swap[-1].unsqueeze(0))[0]
 #                 g_loss = self.adv_g_loss(fake_pred)
-    
+
 
 #                 loss_, loss_dict = self.calc_loss(source, target, swap, flag, self.global_step)
 #                 loss_dict["g_loss"] = float(g_loss)
@@ -1832,7 +1823,7 @@ if __name__ == '__main__':
 #                     source14 = Image.open('photos/rose.png').convert('RGB').resize((1024, 1024))
 #                     source14 = img_transform(source14).unsqueeze(0)
 
-                    
+
 #                     target11 = Image.open('photos/dua.png').convert('RGB').resize((1024, 1024))
 #                     target11 = img_transform(target11).unsqueeze(0)
 #                     target12 = Image.open('photos/timon.png').convert('RGB').resize((1024, 1024))
@@ -1842,7 +1833,7 @@ if __name__ == '__main__':
 #                     target14 = Image.open('photos/rose.png').convert('RGB').resize((1024, 1024))
 #                     target14 = img_transform(target14).unsqueeze(0)
 
-                    
+
 #                     # target11 = Image.open('photos/cil.png').convert('RGB').resize((1024, 1024))
 #                     # target11 = img_transform(target11).unsqueeze(0)
 #                     # target12 = Image.open('photos/harry.png').convert('RGB').resize((1024, 1024))
@@ -1857,14 +1848,14 @@ if __name__ == '__main__':
 #                     source1 = source1.to(self.device).float()
 #                     target1 = target1.to(self.device).float()
 
-                    
+
 #                     swap1, mask, recon = self.net(source1, target1, True)
 #                     imgs = self.parse_images(source1, target1, swap1, None, None)
 #                     self.log_images('images/train/faces', imgs1_data=imgs)
 #                     if self.global_step < 100:
 #                         imgs = self.parse_images(source1, target1, swap1, mask, recon)
 #                         self.log_images('images/train/mask', imgs1_data=imgs, mask=True)
-                    
+
 
 #                 if self.rank == 0 and (self.global_step % self.opts.board_interval == 0):
 #                     self.print_metrics(loss_dict, prefix='train')
@@ -1912,11 +1903,11 @@ if __name__ == '__main__':
 
 #         if self.opts.id_lambda > 0:
 #             loss_id = self.id_loss(swap, source)
-            
+
 #             loss_id = loss_id.to(self.device)
-            
+
 #             loss_id = torch.sum(loss_id * (1 - flag)) / torch.sum(1 - flag)
-            
+
 
 #             loss_dict['loss_id'] = float(loss_id)
 #             loss += loss_id * self.opts.id_lambda
@@ -2063,12 +2054,12 @@ if __name__ == '__main__':
 #         #         if self.opts.train_D:
 #         #             self.D.train()
 #         #         return None  # Do not log, inaccurate in first batch
-            
+
 #         #     for i in range(swap.shape[0]):
 #         #         torch_utils.tensor2im(source[i]).save(f'validate/{self.global_step}/source/{(batch_idx + 1) * i}.jpg')
 #         #         torch_utils.tensor2im(target[i]).save(f'validate/{self.global_step}/target/{(batch_idx + 1) * i}.jpg')
 #         #         torch_utils.tensor2im(swap[i]).save(f'validate/{self.global_step}/swap/{(batch_idx + 1) * i}.jpg')
-                
+
 
 #         # loss_dict = torch_utils.aggregate_loss_dict(agg_loss_dict)
 #         loss_dict = calc_metrics(self.net, self.device)
