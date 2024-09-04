@@ -183,7 +183,6 @@ class AdaIN(nn.Module):
         x = gamma[..., None, None] * self.norm(input) + beta[..., None, None]  # B x 512 x 32 x 32
         x = self.relu(x)
         x = self.conv(x)
-        x = self.relu(x)
         return x
 
 
