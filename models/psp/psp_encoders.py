@@ -15,7 +15,6 @@ from models.psp.helpers import (
     _upsample_add
 )
 
-
 from models.stylegan2.model import EqualLinear
 
 
@@ -120,6 +119,8 @@ class FeatureEncoderBlock(nn.Module):
 
     def forward(self, x):
         return self.body(x)
+
+
 #
 #
 class GradualStyleBlock(Module):
@@ -147,6 +148,8 @@ class GradualStyleBlock(Module):
         x = x.view(-1, self.out_c)
         x = self.linear(x)
         return x
+
+
 #
 #
 # class GradualStyleEncoder(Module):
@@ -432,6 +435,87 @@ class Encoder4Editing(Module):
                 c3 = x
 
         # Infer main W and duplicate it
+        w0 = self.styles[0](c3)
+        w = w0.repeat(self.style_count, 1, 1).permute(1, 0, 2)
+        stage = self.progressive_stage.value
+        features = c3
+        for i in range(1, min(stage + 1, self.style_count)):  # Infer additional deltas
+            if i == self.coarse_ind:
+                p2 = _upsample_add(c3, self.latlayer1(c2))  # FPN's middle features
+                features = p2
+            elif i == self.middle_ind:
+                p1 = _upsample_add(p2, self.latlayer2(c1))  # FPN's fine features
+                features = p1
+            delta_i = self.styles[i](features)
+            w[:, i] += delta_i
+        if return_feat:
+            return w, features
+        return w
+
+
+class Encoder4Editing_backbone(Module):
+    def __init__(self, num_layers, mode="ir", opts=None):
+        super(Encoder4Editing_backbone, self).__init__()
+        assert num_layers in [50, 100, 152], "num_layers should be 50,100, or 152"
+        assert mode in ["ir", "ir_se"], "mode should be ir or ir_se"
+        blocks = get_blocks(num_layers)
+        if mode == "ir":
+            unit_module = bottleneck_IR
+        elif mode == "ir_se":
+            unit_module = bottleneck_IR_SE
+        self.input_layer = Sequential(
+            Conv2d(3, 64, (3, 3), 1, 1, bias=False), BatchNorm2d(64), PReLU(64)
+        )
+        modules = []
+        for block in blocks:
+            for bottleneck in block:
+                modules.append(
+                    unit_module(
+                        bottleneck.in_channel, bottleneck.depth, bottleneck.stride
+                    )
+                )
+        self.body = Sequential(*modules)
+
+    def forward(self, x, return_feat=False):
+        x = self.input_layer(x)
+
+        modulelist = list(self.body._modules.values())
+        for i, l in enumerate(modulelist):
+            x = l(x)
+            if i == 6:
+                c1 = x
+            elif i == 20:
+                c2 = x
+            elif i == 23:
+                c3 = x
+
+        return x, c1, c2, c3
+
+
+class StyleHead(Module):
+    def __init__(self):
+        super(StyleHead, self).__init__()
+        self.styles = nn.ModuleList()
+        log_size = int(math.log(1024, 2))
+        self.style_count = 2 * log_size - 2
+        self.coarse_ind = 3
+        self.middle_ind = 7
+
+        for i in range(self.style_count):
+            if i < self.coarse_ind:
+                style = GradualStyleBlock(512, 512, 16)
+            elif i < self.middle_ind:
+                style = GradualStyleBlock(512, 512, 32)
+            else:
+                style = GradualStyleBlock(512, 512, 64)
+            self.styles.append(style)
+
+        self.latlayer1 = nn.Conv2d(256, 512, kernel_size=1, stride=1, padding=0)
+        self.latlayer2 = nn.Conv2d(128, 512, kernel_size=1, stride=1, padding=0)
+
+        self.progressive_stage = ProgressiveStage.Inference
+
+    def forward(self, x, c1, c2, c3, return_feat=False):
         w0 = self.styles[0](c3)
         w = w0.repeat(self.style_count, 1, 1).permute(1, 0, 2)
         stage = self.progressive_stage.value
