@@ -25,7 +25,6 @@ from models.stylegan2.model import Discriminator
 from utils import torch_utils
 from PIL import Image
 from metrics_calc import calc_metrics
-from face_parsing.face_parsing_demo import vis_parsing_maps
 from optimizers import Ranger
 
 sys.path.append(".")
@@ -171,7 +170,6 @@ class Trainer:
 
         # Initialize optimizer
         self.optimizer, self.optimizer_D, = self.configure_optimizers()
-        # self.optimizer, _ = self.configure_optimizers()  # TODO потом удалить
 
         # Initialize datasets
         self.train_dataset, self.test_dataset = self.configure_datasets()
@@ -201,23 +199,18 @@ class Trainer:
         # Initialize wandb
         if self.rank == 0:
             wandb.login(key=KEY, relogin=True)
-            # if self.opts.checkpoint_path is not None:
-            #     wandb.init(project='RobustSwap', entity='free001style', name=opts.exp_dir.strip('exp/'),
-            #                config=self.opts,
-            #                resume='allow')
-            #     code = wandb.Artifact("project-source", type="code")
-            #     for path in glob.glob("**/*.py", recursive=True):
-            #         if not path.startswith("wandb"):
-            #             if os.path.basename(path) != path:
-            #                 code.add_dir(
-            #                     os.path.dirname(path), name=os.path.dirname(path)
-            #                 )
-            #             else:
-            #                 code.add_file(os.path.basename(path), name=path)
-            #     wandb.run.log_artifact(code)
-            # else:
             wandb.init(project='RobustSwap', entity='free001style', name=opts.exp_dir.strip('exp/'),
                        config=self.opts)
+            code = wandb.Artifact("project-source", type="code")
+            for path in glob.glob("**/*.py", recursive=True):
+                if not path.startswith("wandb"):
+                    if os.path.basename(path) != path:
+                        code.add_dir(
+                            os.path.dirname(path), name=os.path.dirname(path)
+                        )
+                    else:
+                        code.add_file(os.path.basename(path), name=path)
+            wandb.run.log_artifact(code)
 
         # Initialize checkpoint dir
         self.checkpoint_dir = os.path.join(opts.exp_dir, 'checkpoints')
@@ -298,13 +291,6 @@ class Trainer:
                 if flag.sum() == 0:
                     target[-1, ...] = source[-1, ...]
                     flag[-1] = 1
-                # if flag.sum() == source.shape[0]:
-                #     target[-1, ...] = source[-2, ...]
-                #     flag[-1] = 0
-                # if self.global_step % self.opts.same_image_interval == 0:
-                #     target = torch.clone(source)
-                target = torch.clone(source)
-                flag = torch.tensor([1, 1, 1, 1])
 
                 source = source.to(self.device).float()
                 target = target.to(self.device).float()
@@ -315,6 +301,8 @@ class Trainer:
                     torch_utils.requires_grad(self.net, False)
                     torch_utils.requires_grad(self.D, True)
                     self.net.module.face_parser.eval()
+                    self.net.module.target_encoder.eval()
+                    self.net.module.source_identity.eval()
                     swap = self.net(source, target, step=self.global_step)
                     fake_pred = self.D(swap)
                     real_pred = self.D(target)
@@ -346,54 +334,33 @@ class Trainer:
                     d_loss_dict["r1_loss"] = float(r1_loss)
 
                 # ============ update G ===============
-                # self.opts.train_G and self.opts.train_D should be both true or false
-                #                 if self.opts.train_G and self.opts.train_D:
-                #                     torch_utils.requires_grad(self.net, True)
-                #                     torch_utils.requires_grad(self.net.module.G.style, False)  # fix z-to-W mapping of original StyleGAN
-                #                     torch_utils.requires_grad(self.net.module.G.input, False)
-                #                     torch_utils.requires_grad(self.net.module.G.conv1, False)
-                #                     torch_utils.requires_grad(self.net.module.G.to_rgb1, False)
-                #                     torch_utils.requires_grad(self.net.module.G.convs[:6], False)
-                #                     torch_utils.requires_grad(self.net.module.G.to_rgbs[:3], False)
-                #                     torch_utils.requires_grad(self.net.module.source_shape, False)
-                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
-                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
-
-                #                 # only training Mapping
-                #                 elif not self.opts.train_G and not self.opts.train_D:
-                #                     torch_utils.requires_grad(self.net.module.G, False)
-                #                     torch_utils.requires_grad(self.net.module.source_shape, False)
-                #                     torch_utils.requires_grad(self.net.module.source_identity, False)
-                #                     torch_utils.requires_grad(self.net.module.target_encoder, False)  # TODO потом удалить
-
                 if self.opts.train_D:
                     torch_utils.requires_grad(self.D, False)
 
-                torch_utils.requires_grad(self.net.module.identity_backbone, True)
-                torch_utils.requires_grad(self.net.module.encoder, True)
-                torch_utils.requires_grad(self.net.module.source_identity, True)
-                torch_utils.requires_grad(self.net.module.target_identity, True)
-                torch_utils.requires_grad(self.net.module.G, False)
                 torch_utils.requires_grad(self.net.module.face_parser, False)
+                torch_utils.requires_grad(self.net.module.G, False)
+                torch_utils.requires_grad(self.net.module.source_shape, False)
+                torch_utils.requires_grad(self.net.module.source_identity, False)
+                torch_utils.requires_grad(self.net.module.target_encoder, False)
+                torch_utils.requires_grad(self.net.module.shifter_s, True)
+                torch_utils.requires_grad(self.net.module.shifter_t, True)
+                torch_utils.requires_grad(self.net.module.fuser, True)
+                torch_utils.requires_grad(self.net.module.mapping, True)
 
                 self.net.module.face_parser.eval()
+                self.net.module.target_encoder.eval()
+                self.net.module.source_identity.eval()
 
-                swap, s_mask, t_mask = self.net(source, target, return_feat=True, step=self.global_step,
-                                                is_stylefusion=True)
+                swap, s_mask, t_mask = self.net(source, target, return_feat=True, step=self.global_step, train=True)
 
-                #                 g_loss = torch.tensor(0.0, device=self.device)
+                g_loss = torch.tensor(0.0, device=self.device)
 
-                #                 fake_pred = self.D(swap)
-                #                 g_loss = self.adv_g_loss(fake_pred)
+                fake_pred = self.D(swap)
+                g_loss = self.adv_g_loss(fake_pred)
 
-                loss_, loss_dict = self.calc_loss(source, target, swap, flag, s_mask, t_mask)
-                # loss_dict["g_loss"] = float(g_loss)
-                # if self.opts.train_G:
-                #     overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
-                # else:
-                #     overall_loss = loss_
-                # overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
-                overall_loss = loss_
+                loss_, loss_dict = self.calc_loss(source, target, swap, flag)
+                loss_dict["g_loss"] = float(g_loss)
+                overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)
 
                 self.net.zero_grad()
@@ -503,68 +470,43 @@ class Trainer:
             print('OMG, finished training!')
             wandb.finish()
 
-    def calc_loss(self, source, target, swap, flag, s_mask, t_mask):
+    def calc_loss(self, source, target, swap, flag):
         print(self.global_step)
         loss_dict = {}
         loss = torch.tensor(0.0, device=self.device)
 
-        flag = flag.bool()
-
-        source_swap = source[~flag]
-        target_swap = target[~flag]
-        swap_swap = swap[~flag]
-        s_mask_swap = s_mask[~flag]
-        t_mask_swap = t_mask[~flag]
-
-        source_inv = source[flag]
-        target_inv = target[flag]
-        swap_inv = swap[flag]
-        s_mask_inv = s_mask[flag]
-        t_mask_inv = t_mask[flag]
-
         if self.opts.id_lambda > 0:
-            #             loss_id = self.id_loss(swap_swap * (1 - t_mask_swap), source_swap * s_mask_swap)
-            #             loss_id = torch.mean(loss_id)
-            #             loss_dict['loss_id'] = float(loss_id)
-            #             loss += loss_id * self.opts.id_lambda * source_swap.shape[0] / source.shape[0]
+            loss_id = self.id_loss(swap, source)
 
-            loss_id = self.id_loss(swap_inv * (1 - t_mask_inv), source_inv * s_mask_inv)
-            loss_id = torch.mean(loss_id)
-            loss_dict['loss_id_inv'] = float(loss_id)
-            loss += loss_id * 0.1 * source_inv.shape[0] / source.shape[0]
+            loss_id = loss_id.to(self.device)
+
+            loss_id = torch.sum(loss_id * (1 - flag)) / torch.sum(1 - flag)
+            loss_dict['loss_id'] = float(loss_id)
+            loss += loss_id * self.opts.id_lambda
         if self.opts.recon_lambda > 0:
-            # loss_lpips = 0
-            # for i in range(1):
-            #     loss_lpips_ = self.lpips_loss(
-            #         F.adaptive_avg_pool2d(swap_swap * t_mask_swap, (1024 // 2 ** i, 1024 // 2 ** i)),
-            #         F.adaptive_avg_pool2d(target_swap * t_mask_swap, (1024 // 2 ** i, 1024 // 2 ** i))
-            #     )
-            #     loss_lpips += loss_lpips_.mean()
-            # loss_l2 = ((swap_swap * t_mask_swap - target_swap * t_mask_swap) ** 2).mean()
-            # recon = (0.8 * loss_lpips + loss_l2)
-            # loss_dict['mse'] = float(loss_l2)
-            # loss_dict['lpips'] = float(loss_lpips)
-            # loss_dict['recon'] = float(recon)
-            # loss += recon * self.opts.recon_lambda * source_swap.shape[0] / source.shape[0]
-
             loss_lpips = 0
             for i in range(1):
                 loss_lpips_ = self.lpips_loss(
-                    F.adaptive_avg_pool2d(swap_inv, (1024 // 2 ** i, 1024 // 2 ** i)),
-                    F.adaptive_avg_pool2d(target_inv, (1024 // 2 ** i, 1024 // 2 ** i))
+                    F.adaptive_avg_pool2d(swap * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i)),
+                    F.adaptive_avg_pool2d(target * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i))
                 )
-                loss_lpips += loss_lpips_.mean()
-            loss_l2 = ((swap_inv - target_inv) ** 2).mean()
-            recon = (0.8 * loss_lpips + loss_l2)
-            loss_dict['mse_inv'] = float(loss_l2)
-            loss_dict['lpips_inv'] = float(loss_lpips)
-            loss_dict['recon_inv'] = float(recon)
-            loss += recon * source_inv.shape[0] / source.shape[0]
+                loss_lpips += loss_lpips_.sum()
+            loss_l2 = ((swap - target) ** 2).mean(dim=(1, 2, 3)) ** 0.5
+            loss_l2 = (loss_l2 * flag).sum()
+
+            mse = loss_l2 / torch.sum(flag)
+            loss_dict['mse'] = float(mse)
+
+            lpips = loss_lpips / torch.sum(flag)
+            loss_dict['lpips'] = float(lpips)
+
+            recon = mse + 0.8 * lpips
+            loss_dict['recon'] = float(recon)
+            loss += recon * self.opts.recon_lambda
         if self.opts.pl_lambda > 0:
             loss_pl = self.pl_loss(source, target, swap)
             loss_dict['pl_loss'] = float(loss_pl)
             loss += loss_pl * self.opts.pl_lambda
-
         print(loss_dict)
         return loss, loss_dict
 
@@ -646,57 +588,6 @@ class Trainer:
 
     def validate(self):
         self.net.eval()
-        # if self.opts.train_D:
-        #     self.D.eval()
-        # agg_loss_dict = []
-        # os.makedirs(os.path.dirname(f'validate/{self.global_step}'))
-        # os.makedirs(os.path.dirname(f'validate/{self.global_step}/source'))
-        # os.makedirs(os.path.dirname(f'validate/{self.global_step}/target'))
-        # os.makedirs(os.path.dirname(f'validate/{self.global_step}/swap'))
-        # os.makedirs(f'validate/{self.global_step}', exist_ok=True)
-        # os.makedirs(f'validate/{self.global_step}/source', exist_ok=True)
-        # os.makedirs(f'validate/{self.global_step}/target', exist_ok=True)
-        # os.makedirs(f'validate/{self.global_step}/swap', exist_ok=True)
-        # for batch_idx, batch in enumerate(self.test_dataloader):
-        #     source, target = batch
-        #     # if batch_idx % self.opts.same_image_interval == 0:
-        #     #     target = torch.clone(source)
-
-        #     with torch.no_grad():
-        #         source = source.to(self.device).float()
-        #         target = target.to(self.device).float()
-        #         swap = self.net(source, target)
-        #         loss_dict = {}
-        #         loss_ = 0.0
-        #         g_loss = torch.tensor(0.0, device=self.device)
-        #         if self.opts.train_G:
-        #             fake_pred = self.D(swap)
-        #             g_loss = self.adv_g_loss(fake_pred)
-
-        #         # loss_, loss_dict = self.calc_loss(source, target, swap, flag, batch_idx)
-        #         loss_dict["g_loss"] = float(g_loss)
-
-        #         if self.opts.train_G:
-        #             overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
-        #         else:
-        #             overall_loss = loss_
-        #         loss_dict["loss"] = float(overall_loss)
-
-        #     agg_loss_dict.append(loss_dict)
-
-        #     # For first step just do sanity test on small amount of data
-        #     if self.global_step == 0 and batch_idx >= 4:
-        #         self.net.train()
-        #         if self.opts.train_D:
-        #             self.D.train()
-        #         return None  # Do not log, inaccurate in first batch
-
-        #     for i in range(swap.shape[0]):
-        #         torch_utils.tensor2im(source[i]).save(f'validate/{self.global_step}/source/{(batch_idx + 1) * i}.jpg')
-        #         torch_utils.tensor2im(target[i]).save(f'validate/{self.global_step}/target/{(batch_idx + 1) * i}.jpg')
-        #         torch_utils.tensor2im(swap[i]).save(f'validate/{self.global_step}/swap/{(batch_idx + 1) * i}.jpg')
-
-        # loss_dict = torch_utils.aggregate_loss_dict(agg_loss_dict)
         loss_dict = calc_metrics(self.net, self.device, self.global_step)
         self.log_metrics(loss_dict, prefix='metrics')
         self.print_metrics(loss_dict, prefix='metrics')
