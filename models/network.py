@@ -266,6 +266,7 @@ class Net(nn.Module):
         t_mask = t_mask.cuda()
 
         s_feat *= s_mask
+        t_feat *= t_mask
         if train:
             for i in range(s_feat.shape[0]):
                 try:
@@ -280,10 +281,11 @@ class Net(nn.Module):
         t_feat = self.shifter_t(t_feat)
 
         feat = self.fuser(torch.cat([s_feat, t_feat], dim=1))
-        a = min(1.0, step / 5000)
+        # a = min(1.0, step / 5000)
 
         s_style[:, :7] = t_w_id[:, :7]
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
+        # img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
+        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
         if return_feat:
             return img, None, None
         if verbose:
