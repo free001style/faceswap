@@ -137,7 +137,7 @@ class LPIPS_(EvalMetric):
         self.model = LPIPS(net_type='alex').to(device).eval()
 
     def update(self, target, swap):
-        for i in range(3):
+        for i in range(1):
             loss_lpips_ = self.model(
                     F.adaptive_avg_pool2d(swap, (1024 // 2 ** i, 1024 // 2 ** i)),
                     F.adaptive_avg_pool2d(target, (1024 // 2 ** i, 1024 // 2 ** i))

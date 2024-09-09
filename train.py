@@ -303,6 +303,7 @@ class Trainer:
                     self.net.module.face_parser.eval()
                     self.net.module.target_encoder.eval()
                     self.net.module.source_identity.eval()
+                    self.net.module.arcface.eval()
                     swap = self.net(source, target, step=self.global_step)
                     fake_pred = self.D(swap)
                     real_pred = self.D(target)
@@ -337,6 +338,7 @@ class Trainer:
                 if self.opts.train_D:
                     torch_utils.requires_grad(self.D, False)
 
+                torch_utils.requires_grad(self.net.module.arcface, False)
                 torch_utils.requires_grad(self.net.module.face_parser, False)
                 torch_utils.requires_grad(self.net.module.G, False)
                 torch_utils.requires_grad(self.net.module.source_shape, False)
@@ -346,10 +348,15 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.shifter_t, True)
                 torch_utils.requires_grad(self.net.module.fuser, True)
                 torch_utils.requires_grad(self.net.module.mapping, True)
+                torch_utils.requires_grad(self.net.module.adain1, True)
+                torch_utils.requires_grad(self.net.module.adain2, True)
+                torch_utils.requires_grad(self.net.module.adain3, True)
+                torch_utils.requires_grad(self.net.module.adain4, True)
 
                 self.net.module.face_parser.eval()
                 self.net.module.target_encoder.eval()
                 self.net.module.source_identity.eval()
+                self.net.module.arcface.eval()
 
                 swap, s_mask, t_mask = self.net(source, target, return_feat=True, step=self.global_step, train=True)
 

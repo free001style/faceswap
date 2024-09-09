@@ -129,9 +129,9 @@ class Fuser(nn.Module):
 class AdaIN_param(nn.Module):
     def __init__(self):
         super().__init__()
-        self.fc1 = nn.Linear(512 * 8 * 8, 512 * 8)
-        self.fc2 = nn.Linear(512 * 8, 512)
-        self.norm = nn.LayerNorm(512 * 8)
+        self.fc1 = nn.Linear(512 * 7 * 7, 512 * 7)
+        self.fc2 = nn.Linear(512 * 7, 512)
+        self.norm = nn.LayerNorm(512 * 7)
         self.relu = nn.LeakyReLU(0.2)
 
     def forward(self, x):
@@ -162,10 +162,10 @@ class Net(nn.Module):
 
         self.target_encoder = FSEInverter32(checkpoint_path='pretrained_ckpts/iteration_135000.pt').eval()
 
-        # self.arcface = Backbone(input_size=112, num_layers=50, drop_ratio=0.6, mode='ir_se')
-        # self.arcface.load_state_dict(torch.load(opts.ir_se50_path))
-        # self.arcface.output_layer = nn.Flatten()
-        # self.arcface.eval()
+        self.arcface = Backbone(input_size=112, num_layers=50, drop_ratio=0.6, mode='ir_se')
+        self.arcface.load_state_dict(torch.load(opts.ir_se50_path))
+        self.arcface.output_layer = nn.Flatten()
+        self.arcface.eval()
 
         self.source_identity = Encoder4Editing(50, 'ir_se', opts).eval()
         ckpt = torch.load(opts.e4e_path)
@@ -184,6 +184,11 @@ class Net(nn.Module):
 
         self.face_parser = FaceParser(seg_ckpt='./pretrained_ckpts/79999_iter.pth', device='cuda:0').eval()
 
+        self.adain1 = AdaIN()
+        self.adain2 = AdaIN()
+        self.adain3 = AdaIN()
+        self.adain4 = AdaIN()
+
         requires_grad(self.face_parser, False)
         requires_grad(self.G, False)
         requires_grad(self.source_shape, False)
@@ -193,6 +198,10 @@ class Net(nn.Module):
         requires_grad(self.shifter_t, True)
         requires_grad(self.fuser, True)
         requires_grad(self.mapping, True)
+        requires_grad(self.adain1, True)
+        requires_grad(self.adain2, True)
+        requires_grad(self.adain3, True)
+        requires_grad(self.adain4, True)
 
     def shift_tensor(self, feat, mask):
         mask = mask.squeeze()
@@ -280,7 +289,19 @@ class Net(nn.Module):
         s_feat = self.shifter_s(s_feat)
         t_feat = self.shifter_t(t_feat)
 
-        feat = self.fuser(torch.cat([s_feat, t_feat], dim=1))
+        s_112 = F.interpolate(s_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
+        source_latent = self.arcface(s_112)[0]
+        t_112 = F.interpolate(t_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
+        target_latent = self.arcface(t_112)[0]
+
+        t_adain1 = self.adain1(t_feat, source_latent)
+        t_adain2 = self.adain2(t_adain1, source_latent)
+
+        s_adain1 = self.adain3(s_feat, target_latent)
+        s_adain2 = self.adain4(s_adain1, target_latent)
+
+        feat = self.fuser(torch.cat([t_adain2, s_adain2], dim=1))
+
         # a = min(1.0, step / 5000)
 
         s_style[:, :7] = t_w_id[:, :7]
