@@ -255,7 +255,6 @@ class Net(nn.Module):
            skip -- B x 3 x 32 x 32"""
         s_256 = F.interpolate(source, (256, 256), mode='bilinear')
         t_256 = F.interpolate(target, (256, 256), mode='bilinear')
-
         s_w_id = self.source_identity(s_256)
         t_w_id = self.source_identity(t_256)
         s_w_id += self.latent_avg[None, ...]
@@ -301,12 +300,11 @@ class Net(nn.Module):
         s_adain2 = self.adain4(s_adain1, target_latent)
 
         feat = self.fuser(torch.cat([t_adain2, s_adain2], dim=1))
-
-        # a = min(1.0, step / 5000)
+        a = min(1.0, step / 5000)
 
         s_style[:, :7] = t_w_id[:, :7]
-        # img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
+        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
+        # img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
         if return_feat:
             return img, None, None
         if verbose:
