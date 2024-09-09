@@ -275,7 +275,7 @@ class Net(nn.Module):
                 except:
                     continue
 
-        s_feat = transforms.RandomPerspective(0.4)(transforms.RandomHorizontalFlip()(s_feat))
+            s_feat = transforms.RandomPerspective(0.4)(transforms.RandomHorizontalFlip()(s_feat))
 
         s_feat = self.shifter_s(s_feat)
         t_feat = self.shifter_t(t_feat)
