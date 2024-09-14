@@ -447,10 +447,11 @@ class Trainer:
                     imgs = self.parse_images(source1, target1, swap1, None, None)
                     self.log_images('images/train/faces', imgs1_data=imgs)
                     self.log_images('images/train/w_swap',
-                                    imgs1_data=self.parse_images(source1, target1, w_swap, None, None))
+                                    imgs1_data=self.parse_images(source1, target1, w_swap, None, None), mask=False)
                     del source1
                     del target1
                     del swap1
+                    del w_swap
                     torch.cuda.empty_cache()
 
                 if self.rank == 0 and (self.global_step % self.opts.board_interval == 0):
@@ -571,7 +572,7 @@ class Trainer:
         return im_data
 
     def log_images(self, name, imgs1_data, mask=False):
-        fig = torch_utils.vis_faces(imgs1_data, mask)
+        fig = torch_utils.vis_faces(imgs1_data, False)
         step = self.global_step
         path = os.path.join(self.log_dir, name, f'{step:06d}.jpg')
         os.makedirs(os.path.dirname(path), exist_ok=True)
