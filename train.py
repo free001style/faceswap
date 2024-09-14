@@ -345,6 +345,7 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.shifter_s, True)
                 torch_utils.requires_grad(self.net.module.shifter_t, True)
                 torch_utils.requires_grad(self.net.module.fuser, True)
+                torch_utils.requires_grad(self.net.module.fuser2, True)
                 torch_utils.requires_grad(self.net.module.mapping, True)
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
