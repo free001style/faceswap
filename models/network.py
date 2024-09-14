@@ -281,6 +281,7 @@ class Net(nn.Module):
                 except:
                     print('хуй')
                     continue
+            s_feat = transforms.RandomPerspective(0.3)(transforms.RandomHorizontalFlip()(s_feat))
 
         del s_mask
         del t_mask
