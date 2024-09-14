@@ -178,7 +178,6 @@ class Net(nn.Module):
         self.shifter_t = Fuser([[512, 4]], 512)
 
         self.fuser = Fuser([[1024, 2], [768, 2], [512, 2]], init_zeros=False)
-        self.fuser2 = Fuser([[1024, 2], [768, 2], [512, 2]], init_zeros=False)
 
         self.face_parser = FaceParser(seg_ckpt='./pretrained_ckpts/79999_iter.pth', device='cuda:0').eval()
 
@@ -196,7 +195,6 @@ class Net(nn.Module):
         requires_grad(self.shifter_s, True)
         requires_grad(self.shifter_t, True)
         requires_grad(self.fuser, True)
-        requires_grad(self.fuser2, True)
         requires_grad(self.mapping, True)
         requires_grad(self.adain1, True)
         requires_grad(self.adain2, True)
@@ -283,6 +281,7 @@ class Net(nn.Module):
                 except:
                     print('хуй')
                     continue
+                s_feat = transforms.RandomPerspective(0.3)(transforms.RandomHorizontalFlip()(s_feat))
 
         del s_mask
         del t_mask
@@ -304,10 +303,8 @@ class Net(nn.Module):
 
         feat = self.fuser(torch.cat([t_adain2, s_adain2], dim=1))
         s_style[:, :7] = t_w_id[:, :7]
-        _, feat_stylegan = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), early_stop=32,
-                                  return_features=True)
-        feat = self.fuser2(torch.cat([feat_stylegan[-1], feat], dim=1))
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
+        a = min(1.0, step / max_step) if step is not None else 1.0
+        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
         if return_feat:
             return img, None, None
         if verbose:
