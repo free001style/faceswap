@@ -1,21 +1,18 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.transforms as T
+from torchvision import transforms
 from models.stylegan2.model import EqualLinear
 from models.psp.psp_encoders import Inverter, Encoder4Editing
 from utils.torch_utils import get_keys, requires_grad
 from models.deca.deca import DECA
 from models.stylegan2.model import Generator
-# from models.psp.fse import fs_encoder_v2
-# from my_models.FeatureStyleEncoder import FSencoder
-from face_parsing.face_parsing_demo import FaceParser, faceParsing_demo, vis_parsing_maps
+from face_parsing.face_parsing_demo import FaceParser, faceParsing_demo
 from utils.morphology import dilation
 from torchvision.transforms import GaussianBlur as blur
 import torch.nn.init as init
 from StyleFeatureEditor.models.methods import FSEInverter32
 from models.psp.model_irse import Backbone
-from torchvision import transforms
 
 
 def _weights_init(m):
@@ -168,10 +165,10 @@ class Net(nn.Module):
         self.arcface.eval()
 
         self.source_identity = Encoder4Editing(50, 'ir_se', opts).eval()
-        ckpt = torch.load(opts.e4e_path)
+        ckpt = torch.load('./pretrained_ckpts/e4e_ffhq_encode.pt')
         self.source_identity.load_state_dict(get_keys(ckpt, "encoder"))
 
-        self.source_shape = DECA(opts.deca_path)
+        self.source_shape = DECA('./pretrained_ckpts/deca/deca_model.tar')
 
         self.mapping = Mapper()
 
@@ -189,6 +186,7 @@ class Net(nn.Module):
         self.adain3 = AdaIN()
         self.adain4 = AdaIN()
 
+        requires_grad(self.arcface, False)
         requires_grad(self.face_parser, False)
         requires_grad(self.G, False)
         requires_grad(self.source_shape, False)
@@ -238,9 +236,9 @@ class Net(nn.Module):
         mask = faceParsing_demo(self.face_parser, img, convert_to_seg12=True, model_name='default').long()
 
         if mode == 'target':
-            mask_ = logical_or_reduce(*[mask == item for item in [0, 4, 8, 10, 11]]).float()
+            mask_ = logical_or_reduce(*[mask == item for item in [0, 4, 6, 7, 8, 10, 11]]).float()
         else:
-            mask_ = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 6, 7, 9]]).float()
+            mask_ = logical_or_reduce(*[mask == item for item in [1, 2, 3, 5, 9]]).float()
 
         mask_32 = torch.round(F.interpolate(mask_.unsqueeze(1), 32, mode='bilinear', align_corners=False))
         mask_dil = dilation(mask_32, torch.ones(3, 3), engine='convolution')
@@ -249,7 +247,7 @@ class Net(nn.Module):
             return mask_blur, mask
         return mask_blur, None
 
-    def forward(self, source, target, verbose=False, return_feat=False, step=5000, train=False):
+    def forward(self, source, target, verbose=False, return_feat=False, step=None, max_step=5e4, train=False):
         """source -- B x 3 x 1024 x 1024
            target -- B x 3 x 1024 x 1024
            skip -- B x 3 x 32 x 32"""
@@ -281,9 +279,12 @@ class Net(nn.Module):
                     s_feat[i] = self.shift_tensor(s_feat[i], s_mask[i])
                     print(i)
                 except:
+                    print('хуй')
                     continue
 
-            s_feat = transforms.RandomPerspective(0.4)(transforms.RandomHorizontalFlip()(s_feat))
+        del s_mask
+        del t_mask
+        torch.cuda.empty_cache()
 
         s_feat = self.shifter_s(s_feat)
         t_feat = self.shifter_t(t_feat)
@@ -300,11 +301,8 @@ class Net(nn.Module):
         s_adain2 = self.adain4(s_adain1, target_latent)
 
         feat = self.fuser(torch.cat([t_adain2, s_adain2], dim=1))
-        a = min(1.0, step / 5000)
-
         s_style[:, :7] = t_w_id[:, :7]
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
-        # img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
+        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
         if return_feat:
             return img, None, None
         if verbose:
