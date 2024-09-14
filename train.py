@@ -357,7 +357,8 @@ class Trainer:
                 self.net.module.source_identity.eval()
                 self.net.module.arcface.eval()
 
-                swap, s_mask, t_mask = self.net(source, target, return_feat=True, step=self.global_step, train=True)
+                swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
+                                                          train=True)
 
                 g_loss = torch.tensor(0.0, device=self.device)
 
@@ -366,6 +367,13 @@ class Trainer:
 
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
                 loss_dict["g_loss"] = float(g_loss)
+
+                #####FEAT LOSS########
+                feat_loss = torch.nn.MSELoss()(predict_feat, gt_feat)
+                loss_ += (1 - a) * feat_loss
+                loss_dict["feat_loss"] = float(feat_loss)
+                #####FEAT LOSS########
+
                 overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)
 
@@ -435,9 +443,11 @@ class Trainer:
                     source1 = source1.to(self.device).float()
                     target1 = target1.to(self.device).float()
 
-                    swap1 = self.net(source1, target1, step=self.global_step)
+                    swap1, w_swap = self.net(source1, target1, step=self.global_step, verbose=True)
                     imgs = self.parse_images(source1, target1, swap1, None, None)
                     self.log_images('images/train/faces', imgs1_data=imgs)
+                    self.log_images('images/train/w_swap',
+                                    imgs1_data=self.parse_images(source1, target1, w_swap, None, None))
                     del source1
                     del target1
                     del swap1
