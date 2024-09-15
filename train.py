@@ -286,11 +286,11 @@ class Trainer:
             self.D.train()
         while self.global_step <= self.opts.max_steps:
             for batch_idx, batch in enumerate(self.train_dataloader):
-                source0, target0, flag = batch
-                source = torch.cat([source0, transforms.RandomHorizontalFlip()(source0)])
-                target = torch.cat([target0, source0])
+                source, target, flag = batch
+                if flag.sum() == 0:
+                    target[-1, ...] = source[-1, ...]
+                    flag[-1] = 1
 
-                flag = torch.cat([flag, torch.ones(source0.shape[0])])
                 source = source.to(self.device).float()
                 target = target.to(self.device).float()
                 flag = flag.to(self.device)
@@ -346,6 +346,7 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.shifter_s, True)
                 torch_utils.requires_grad(self.net.module.shifter_t, True)
                 torch_utils.requires_grad(self.net.module.fuser, True)
+                # torch_utils.requires_grad(self.net.module.fuser2, True)
                 torch_utils.requires_grad(self.net.module.mapping, True)
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
@@ -357,8 +358,7 @@ class Trainer:
                 self.net.module.source_identity.eval()
                 self.net.module.arcface.eval()
 
-                swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
-                                                          train=True)
+                swap, _, _, _ = self.net(source, target, return_feat=True, step=self.global_step, train=True)
 
                 g_loss = torch.tensor(0.0, device=self.device)
 
@@ -367,13 +367,6 @@ class Trainer:
 
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
                 loss_dict["g_loss"] = float(g_loss)
-
-                #####FEAT LOSS########
-                feat_loss = torch.nn.MSELoss()(predict_feat, gt_feat)
-                loss_ += (1 - a) * feat_loss
-                loss_dict["feat_loss"] = float(feat_loss)
-                #####FEAT LOSS########
-
                 overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)
 
@@ -447,7 +440,7 @@ class Trainer:
                     imgs = self.parse_images(source1, target1, swap1, None, None)
                     self.log_images('images/train/faces', imgs1_data=imgs)
                     self.log_images('images/train/w_swap',
-                                    imgs1_data=self.parse_images(source1, target1, w_swap, None, None), mask=False)
+                                    imgs1_data=self.parse_images(source1, target1, w_swap, None, None), mask=True)
                     del source1
                     del target1
                     del swap1
@@ -495,47 +488,41 @@ class Trainer:
     def calc_loss(self, source, target, swap, flag):
         print(self.global_step)
         loss_dict = {}
+        loss = 0.0
         loss = torch.tensor(0.0, device=self.device)
 
-        flag = flag.bool()
-
-        source_swap = source[~flag]
-        target_swap = target[~flag]
-        swap_swap = swap[~flag]
-
-        source_inv = source[flag]
-        target_inv = target[flag]
-        swap_inv = swap[flag]
-
         if self.opts.id_lambda > 0:
-            loss_id = self.id_loss(swap_swap, source_swap)
-            loss_id = torch.mean(loss_id)
-            loss_dict['loss_id'] = float(loss_id)
-            loss += loss_id * self.opts.id_lambda * source_swap.shape[0] / source.shape[0]
+            loss_id = self.id_loss(swap, source)
 
-            loss_id = self.id_loss(swap_inv, source_inv)
-            loss_id = torch.mean(loss_id)
-            loss_dict['loss_id_inv'] = float(loss_id)
-            loss += loss_id * 0.1 * source_inv.shape[0] / source.shape[0]
+            loss_id = loss_id.to(self.device)
+
+            loss_id = torch.sum(loss_id * (1 - flag)) / torch.sum(1 - flag)
+            loss_dict['loss_id'] = float(loss_id)
+            loss += loss_id * self.opts.id_lambda
         if self.opts.recon_lambda > 0:
             loss_lpips = 0
-            for i in range(1):
+            for i in range(3):
                 loss_lpips_ = self.lpips_loss(
-                    F.adaptive_avg_pool2d(swap_inv, (1024 // 2 ** i, 1024 // 2 ** i)),
-                    F.adaptive_avg_pool2d(target_inv, (1024 // 2 ** i, 1024 // 2 ** i))
+                    F.adaptive_avg_pool2d(swap * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i)),
+                    F.adaptive_avg_pool2d(target * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i))
                 )
-                loss_lpips += loss_lpips_.mean()
-            loss_l2 = ((swap_inv - target_inv) ** 2).mean()
-            recon = (0.8 * loss_lpips + loss_l2)
-            loss_dict['mse_inv'] = float(loss_l2)
-            loss_dict['lpips_inv'] = float(loss_lpips)
-            loss_dict['recon_inv'] = float(recon)
-            loss += recon * source_inv.shape[0] / source.shape[0]
-        if self.opts.pl_lambda > 0:
-            loss_pl = self.pl_loss(source_swap, target_swap, swap_swap)
-            loss_dict['pl_loss'] = float(loss_pl)
-            loss += loss_pl * self.opts.pl_lambda * source_swap.shape[0] / source.shape[0]
+                loss_lpips += loss_lpips_.sum()
+            loss_l2 = ((swap - target) ** 2).mean(dim=(1, 2, 3))
+            loss_l2 = (loss_l2 * flag).sum()
 
+            mse = loss_l2 / torch.sum(flag)
+            loss_dict['mse'] = float(mse)
+
+            lpips = loss_lpips / torch.sum(flag)
+            loss_dict['lpips'] = float(lpips)
+
+            recon = mse + 0.8 * lpips
+            loss_dict['recon'] = float(recon)
+            loss += recon * self.opts.recon_lambda
+        if self.opts.pl_lambda > 0:
+            loss_pl = self.pl_loss(source, target, swap)
+            loss_dict['pl_loss'] = float(loss_pl)
+            loss += loss_pl * self.opts.pl_lambda
         print(loss_dict)
         return loss, loss_dict
 

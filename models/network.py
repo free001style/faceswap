@@ -1,18 +1,21 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import transforms
+import torchvision.transforms as T
 from models.stylegan2.model import EqualLinear
 from models.psp.psp_encoders import Inverter, Encoder4Editing
 from utils.torch_utils import get_keys, requires_grad
 from models.deca.deca import DECA
 from models.stylegan2.model import Generator
-from face_parsing.face_parsing_demo import FaceParser, faceParsing_demo
+# from models.psp.fse import fs_encoder_v2
+# from my_models.FeatureStyleEncoder import FSencoder
+from face_parsing.face_parsing_demo import FaceParser, faceParsing_demo, vis_parsing_maps
 from utils.morphology import dilation
 from torchvision.transforms import GaussianBlur as blur
 import torch.nn.init as init
 from StyleFeatureEditor.models.methods import FSEInverter32
 from models.psp.model_irse import Backbone
+from torchvision import transforms
 
 
 def _weights_init(m):
@@ -281,20 +284,20 @@ class Net(nn.Module):
                 except:
                     print('хуй')
                     continue
-            s_feat = transforms.RandomPerspective(0.3)(transforms.RandomHorizontalFlip()(s_feat))
 
         del s_mask
+        del t_mask
         torch.cuda.empty_cache()
 
         s_feat = self.shifter_s(s_feat)
-        t_feat_s = self.shifter_t(t_feat)
+        t_feat = self.shifter_t(t_feat)
 
         s_112 = F.interpolate(s_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
         source_latent = self.arcface(s_112)[0]
         t_112 = F.interpolate(t_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
         target_latent = self.arcface(t_112)[0]
 
-        t_adain1 = self.adain1(t_feat_s, source_latent)
+        t_adain1 = self.adain1(t_feat, source_latent)
         t_adain2 = self.adain2(t_adain1, source_latent)
 
         s_adain1 = self.adain3(s_feat, target_latent)
@@ -302,10 +305,9 @@ class Net(nn.Module):
 
         feat = self.fuser(torch.cat([t_adain2, s_adain2], dim=1))
         s_style[:, :7] = t_w_id[:, :7]
-        a = min(1.0, step / max_step) if step is not None else 1.0
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7), feature_scale=a)
+        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
         if return_feat:
-            return img, feat * t_mask, t_feat, a
+            return img, None, None, None
         if verbose:
             return img, self.G([s_style])[0]
         return img
