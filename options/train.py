@@ -44,7 +44,7 @@ class TrainOptions:
         self.parser.add_argument('--board_interval', default=50, type=int,
                                  help='Interval for logging metrics to wandb')
         self.parser.add_argument('--val_interval', default=1000, type=int, help='Validation interval')
-        self.parser.add_argument('--save_interval', default=1000, type=int, help='Model checkpoint interval')
+        self.parser.add_argument('--save_interval', default=5000, type=int, help='Model checkpoint interval')
         self.parser.add_argument('--same_image_interval', default=3, type=int,
                                  help='Interval for sampling same source and target')
 
