@@ -501,7 +501,7 @@ class Trainer:
             loss += loss_id * self.opts.id_lambda
         if self.opts.recon_lambda > 0:
             loss_lpips = 0
-            for i in range(3):
+            for i in range(1):
                 loss_lpips_ = self.lpips_loss(
                     F.adaptive_avg_pool2d(swap * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i)),
                     F.adaptive_avg_pool2d(target * flag[:, None, None, None], (1024 // 2 ** i, 1024 // 2 ** i))

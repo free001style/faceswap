@@ -207,23 +207,4 @@ class FLAME(nn.Module):
                           self.shapedirs, self.posedirs,
                           self.J_regressor, self.parents,
                           self.lbs_weights, dtype=self.dtype)
-
-        lmk_faces_idx = self.lmk_faces_idx.unsqueeze(dim=0).expand(batch_size, -1)
-        lmk_bary_coords = self.lmk_bary_coords.unsqueeze(dim=0).expand(batch_size, -1, -1)
-
-        dyn_lmk_faces_idx, dyn_lmk_bary_coords = self._find_dynamic_lmk_idx_and_bcoords(
-            full_pose, self.dynamic_lmk_faces_idx,
-            self.dynamic_lmk_bary_coords,
-            self.neck_kin_chain, dtype=self.dtype)
-        lmk_faces_idx = torch.cat([dyn_lmk_faces_idx, lmk_faces_idx], 1)
-        lmk_bary_coords = torch.cat([dyn_lmk_bary_coords, lmk_bary_coords], 1)
-
-        landmarks2d = vertices2landmarks(vertices, self.faces_tensor,
-                                         lmk_faces_idx,
-                                         lmk_bary_coords)
-        # bz = vertices.shape[0]
-        # landmarks3d = vertices2landmarks(vertices, self.faces_tensor,
-        #                                  self.full_lmk_faces_idx.repeat(bz, 1),
-        #                                  self.full_lmk_bary_coords.repeat(bz, 1, 1))
-        # return vertices, landmarks2d, landmarks3d
-        return landmarks2d
+        return vertices
