@@ -346,6 +346,8 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.mapping, True)
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
+                torch_utils.requires_grad(self.net.module.fuser, True)
+                torch_utils.requires_grad(self.net.module.arcface_fuser, True)
 
                 self.net.module.target_encoder.eval()
                 self.net.module.source_identity.eval()
