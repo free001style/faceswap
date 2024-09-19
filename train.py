@@ -356,7 +356,7 @@ class Trainer:
                 swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
                                                           train=True)
 
-                swap_flip = self.net(source.flip(dims=(-1,)), target)
+                swap_flip = self.net(source, target.flip(dims=(-1,))).flip(dims=(-1,))
 
                 g_loss = torch.tensor(0.0, device=self.device)
 
