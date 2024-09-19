@@ -346,8 +346,6 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.mapping, True)
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
-                torch_utils.requires_grad(self.net.module.fuser, True)
-                torch_utils.requires_grad(self.net.module.arcface_fuser, True)
 
                 self.net.module.target_encoder.eval()
                 self.net.module.source_identity.eval()
@@ -356,6 +354,8 @@ class Trainer:
                 swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
                                                           train=True)
 
+                swap_flip = self.net(source.flip(dims=(-1,)), target)
+
                 g_loss = torch.tensor(0.0, device=self.device)
 
                 fake_pred = self.D(swap)
@@ -363,6 +363,12 @@ class Trainer:
 
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
                 loss_dict["g_loss"] = float(g_loss)
+
+                #####FLIP LOSS######
+                flip_loss = torch.nn.functional.mse_loss(swap, swap_flip)
+                loss_dict["flip_loss"] = float(flip_loss)
+                loss_ += flip_loss
+                #####FLIP LOSS######
 
                 overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)

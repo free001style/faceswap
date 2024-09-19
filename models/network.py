@@ -176,9 +176,6 @@ class Net(nn.Module):
         self.adain1 = AdaIN()
         self.adain2 = AdaIN()
 
-        self.fuser = Fuser([[528, 2], [512, 2]], inplanes=528, init_zeros=False)
-        self.arcface_fuser = Fuser([[448, 2], [232, 2], [16, 2]], inplanes=448, init_zeros=False)
-
         requires_grad(self.arcface, False)
         requires_grad(self.G, False)
         requires_grad(self.source_shape, False)
@@ -187,8 +184,6 @@ class Net(nn.Module):
         requires_grad(self.mapping, True)
         requires_grad(self.adain1, True)
         requires_grad(self.adain2, True)
-        requires_grad(self.arcface_fuser, True)
-        requires_grad(self.fuser, True)
 
     def shift_tensor(self, feat, mask):
         mask = mask.squeeze()
@@ -255,22 +250,13 @@ class Net(nn.Module):
         _, t_feat = self.target_encoder(t_256)
 
         s_112 = F.interpolate(s_256[:, :, 35:223, 32:220], (112, 112), mode='bilinear')
-        source_latents = self.arcface(s_112, True)
-        source_latent = source_latents[-1].view(s_112.shape[0], -1)
+        source_latent = self.arcface(s_112)[0]
 
         t_adain1 = self.adain1(t_feat, source_latent)
         t_adain2 = self.adain2(t_adain1, source_latent)
 
-        c1 = F.interpolate(source_latents[0], (32, 32), mode='bilinear')
-        c2 = F.interpolate(source_latents[1], (32, 32), mode='bilinear')
-        c3 = F.interpolate(source_latents[2], (32, 32), mode='bilinear')
-
-        arcface_feat = self.arcface_fuser(torch.cat([c1, c2, c3], dim=1))  # B x 16 x 32 x 32
-
-        feat = t_adain2 + self.fuser(torch.cat([t_adain2, arcface_feat], dim=1))  # B x 512 x 32 x 32
-
         s_style[:, :7] = t_w_id[:, :7]
-        img, _ = self.G([s_style], new_features=[None] * 7 + [feat] + [None] * (17 - 7))
+        img, _ = self.G([s_style], new_features=[None] * 7 + [t_adain2] + [None] * (17 - 7))
         if return_feat:
             return img, None, None, None
         if verbose:

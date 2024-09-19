@@ -45,24 +45,26 @@ class Backbone(Module):
         x = self.input_layer(x)
 
         if multi_scale:
+            # 多尺度特征
             modulelist = list(self.body._modules.values())
             for i, l in enumerate(modulelist):
                 x = l(x)
                 if i == 2:
-                    c1 = x
+                    c1 = x.view(x.size(0), -1)
                 elif i == 6:
-                    c2 = x
+                    c2 = x.view(x.size(0), -1)
                 elif i == 20:
-                    c3 = x
+                    c3 = x.view(x.size(0), -1)
                 elif i == 23:
-                    c4 = x
+                    c4 = x.view(x.size(0), -1)
         else:
+            # 单尺度到底
             x = self.body(x)
 
         x = self.output_layer(x)
 
         if multi_scale:
-            return [l2_norm(c1), l2_norm(c2), l2_norm(c3), l2_norm(c4)]
+            return [l2_norm(c1), l2_norm(c2), l2_norm(c3), l2_norm(c4), l2_norm(x)]
         else:
             return [l2_norm(x)]
 
