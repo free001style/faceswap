@@ -354,7 +354,7 @@ class Trainer:
                 swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
                                                           train=True)
 
-                swap_flip = self.net(source.flip(dims=(-1,)), target)
+                target_recon = self.net(target, swap)
 
                 g_loss = torch.tensor(0.0, device=self.device)
 
@@ -364,11 +364,11 @@ class Trainer:
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
                 loss_dict["g_loss"] = float(g_loss)
 
-                #####FLIP LOSS######
-                flip_loss = torch.nn.functional.mse_loss(swap, swap_flip)
-                loss_dict["flip_loss"] = float(flip_loss)
-                loss_ += flip_loss
-                #####FLIP LOSS######
+                ######CYCLE LOSS######
+                cycle_loss = torch.nn.functional.mse_loss(target, target_recon)
+                loss_dict["cycle_loss"] = float(cycle_loss)
+                loss_ += cycle_loss
+                ######CYCLE LOSS######
 
                 overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)
