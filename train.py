@@ -342,12 +342,9 @@ class Trainer:
                 torch_utils.requires_grad(self.net.module.source_shape, False)
                 torch_utils.requires_grad(self.net.module.source_identity, False)
                 torch_utils.requires_grad(self.net.module.target_encoder, False)
-
                 torch_utils.requires_grad(self.net.module.mapping, True)
                 torch_utils.requires_grad(self.net.module.adain1, True)
                 torch_utils.requires_grad(self.net.module.adain2, True)
-                torch_utils.requires_grad(self.net.module.fuser, True)
-                torch_utils.requires_grad(self.net.module.arcface_fuser, True)
 
                 self.net.module.target_encoder.eval()
                 self.net.module.source_identity.eval()
@@ -355,8 +352,6 @@ class Trainer:
 
                 swap, predict_feat, gt_feat, a = self.net(source, target, return_feat=True, step=self.global_step,
                                                           train=True)
-
-                swap_flip = self.net(source, target.flip(dims=(-1,))).flip(dims=(-1,))
 
                 g_loss = torch.tensor(0.0, device=self.device)
 
@@ -366,18 +361,11 @@ class Trainer:
                 loss_, loss_dict = self.calc_loss(source, target, swap, flag)
                 loss_dict["g_loss"] = float(g_loss)
 
-                ######FLIP LOSS######
-                flip_loss = 0
-                for i in range(3):
-                    loss_lpips_ = self.lpips_loss(
-                        F.adaptive_avg_pool2d(swap, (1024 // 2 ** i, 1024 // 2 ** i)),
-                        F.adaptive_avg_pool2d(swap_flip, (1024 // 2 ** i, 1024 // 2 ** i))
-                    )
-                    flip_loss += loss_lpips_.sum()
-                flip_loss /= swap.shape[0]
-                loss_dict["flip_loss"] = float(flip_loss)
-                loss_ += flip_loss
-                ######FLIP LOSS######
+                #####FEAT LOSS########
+                # feat_loss = torch.nn.MSELoss()(predict_feat, gt_feat)
+                # loss_ += (1 - a) * feat_loss
+                # loss_dict["feat_loss"] = float(feat_loss)
+                #####FEAT LOSS########
 
                 overall_loss = loss_ + self.opts.g_adv_lambda * g_loss
                 loss_dict["loss"] = float(overall_loss)
@@ -536,6 +524,52 @@ class Trainer:
             loss_pl = self.pl_loss(source, target, swap)
             loss_dict['pl_loss'] = float(loss_pl)
             loss += loss_pl * self.opts.pl_lambda
+        print(loss_dict)
+        return loss, loss_dict
+
+        print(self.global_step)
+        loss_dict = {}
+        loss = torch.tensor(0.0, device=self.device)
+
+        flag = flag.bool()
+
+        source_swap = source[~flag]
+        target_swap = target[~flag]
+        swap_swap = swap[~flag]
+
+        source_inv = source[flag]
+        target_inv = target[flag]
+        swap_inv = swap[flag]
+
+        if self.opts.id_lambda > 0:
+            loss_id = self.id_loss(swap_swap, source_swap)
+            loss_id = torch.mean(loss_id)
+            loss_dict['loss_id'] = float(loss_id)
+            loss += loss_id * self.opts.id_lambda * source_swap.shape[0] / source.shape[0]
+
+            loss_id = self.id_loss(swap_inv, source_inv)
+            loss_id = torch.mean(loss_id)
+            loss_dict['loss_id_inv'] = float(loss_id)
+            loss += loss_id * 0.1 * source_inv.shape[0] / source.shape[0]
+        if self.opts.recon_lambda > 0:
+            loss_lpips = 0
+            for i in range(1):
+                loss_lpips_ = self.lpips_loss(
+                    F.adaptive_avg_pool2d(swap_inv, (1024 // 2 ** i, 1024 // 2 ** i)),
+                    F.adaptive_avg_pool2d(target_inv, (1024 // 2 ** i, 1024 // 2 ** i))
+                )
+                loss_lpips += loss_lpips_.mean()
+            loss_l2 = ((swap_inv - target_inv) ** 2).mean()
+            recon = (0.8 * loss_lpips + loss_l2)
+            loss_dict['mse_inv'] = float(loss_l2)
+            loss_dict['lpips_inv'] = float(loss_lpips)
+            loss_dict['recon_inv'] = float(recon)
+            loss += recon * source_inv.shape[0] / source.shape[0]
+        if self.opts.pl_lambda > 0:
+            loss_pl = self.pl_loss(source_swap, target_swap, swap_swap)
+            loss_dict['pl_loss'] = float(loss_pl)
+            loss += loss_pl * self.opts.pl_lambda * source_swap.shape[0] / source.shape[0]
+
         print(loss_dict)
         return loss, loss_dict
 
